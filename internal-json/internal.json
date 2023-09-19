@@ -1,0 +1,65 @@
+{
+    "messageID": "af630b12-c760-4fda-813c-748bdf92b12b",
+    "messageMetaData": {
+        "messageType": "imageB64",
+        "sourceSystemID": "IngestMessageJavaClient",
+        "sourceTransactionID": "18a9838c-356c-4653-a983-8c356c86535f",
+        "dateTime": "2021-07-03 16:21:12.357246"
+    },
+    "storageContext": {
+        "redisReference": {
+            "server": null,
+            "port": null,
+            "key": null
+        },
+        "S3Reference": {
+            "bucket": null,
+            "key": null
+        },
+        "metaDataReference": {
+            "dynamoDbTableName": null,
+            "primaryKey": null 
+        },
+        "persistence": {
+            "S3": false,
+            "metaData": false
+        }
+    },
+    "messageSecurityContext": {
+        "requestContext": {
+            "AWSRequestID": "...",
+            "requestContext": {
+                "accountId": "...",
+                "apiId": "...",
+                "domainName": ".......",
+                "domainPrefix": "...",
+                "extendedRequestId": "...",
+                "httpMethod": "POST",
+                "identity": {
+                    "accessKey": "...",
+                    "accountId": "...",
+                    "apiKey": "...",
+                    "apiKeyId": "...",
+                    "caller": "...",
+                    "cognitoAuthenticationProvider": "...",
+                    "cognitoAuthenticationType": "...",
+                    "cognitoIdentityId": "...",
+                    "cognitoIdentityPoolId": "...",
+                    "principalOrgId": "...",
+                    "sourceIp": "...xxxx",
+                    "user": "...",
+                    "userAgent": "...",
+                    "userArn": "arn:aws:..."
+                },
+                "path": "/ingestmessage",
+                "protocol": "HTTP/1.1",
+                "requestId": "...",
+                "requestTime": "...",
+                "requestTimeEpoch": 111,
+                "resourceId": "...",
+                "resourcePath": "/ingestmessage",
+                "stage": "..."
+            }
+        }
+    }
+}

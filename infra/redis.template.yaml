@@ -1,0 +1,153 @@
+##
+## MIT No Attribution
+##
+## Copyright 2023 Amazon.com, Inc. or its affiliates.
+##
+## Permission is hereby granted, free of charge, to any person obtaining a copy of this
+## software and associated documentation files (the "Software"), to deal in the Software
+## without restriction, including without limitation the rights to use, copy, modify,
+## merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+## permit persons to whom the Software is furnished to do so.
+##
+## THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+## INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+## PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+## HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+## OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+## SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.##
+AWSTemplateFormatVersion: 2010-09-09
+Description: Redis stack
+Parameters:
+  VpcId:
+    Type: String
+  SubnetGroupIds:
+    Type: List<String>
+  EngineVersion:
+    Type: String
+    Default: 7.0
+  InstanceType:
+    Type: String
+    Default: cache.t2.small
+  ReplicaCount:
+    Type: Number
+    Default: 2
+  PortNumber:
+    Type: Number
+    Default: 6379
+  SnapshotRetentionPeriodInDays:
+    Type: Number
+    Default: 0
+  LogsRetentionInDays:
+    Type: Number
+    Default: 30
+  MultiAZ:
+    Type: String
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Resources:
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow lambda to access Redis
+      SecurityGroupIngress:
+        - Description: HTTP Access from Lambda Function to Internet
+          IpProtocol: tcp
+          FromPort: !Ref PortNumber
+          ToPort: !Ref PortNumber
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VpcId
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Redis subnets
+      SubnetIds: !Ref SubnetGroupIds
+
+  RedisCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: redis-caching-credentials
+      Description: Dynamically generated secret for Redis AuthToken
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "default"}'
+        GenerateStringKey: authToken
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  RedisCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: redis-caching-cluster
+      ReplicationGroupDescription: Redis caching cluster
+      Engine: redis
+      EngineVersion: !Ref EngineVersion
+      Port: !Ref PortNumber
+      CacheNodeType: !Ref InstanceType
+      NumCacheClusters: !Ref ReplicaCount
+      MultiAZEnabled: !Ref MultiAZ
+      AutomaticFailoverEnabled: !Ref MultiAZ
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      TransitEncryptionEnabled: true
+      AuthToken: !Join
+        - ''
+        - - '{{resolve:secretsmanager:'
+          - !Ref RedisCredentialsSecret
+          - ':SecretString:authToken}}'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:06:00'
+      LogDeliveryConfigurations:
+        - DestinationDetails:
+            CloudWatchLogsDetails:
+              LogGroup: !Ref EngineLogLogGroup
+          DestinationType: cloudwatch-logs
+          LogFormat: json
+          LogType: engine-log
+        - DestinationDetails:
+            CloudWatchLogsDetails:
+              LogGroup: !Ref SlowLogLogGroup
+          DestinationType: cloudwatch-logs
+          LogFormat: json
+          LogType: slow-log
+      SecurityGroupIds:
+        - !Ref RedisSecurityGroup
+      SnapshotRetentionLimit: !Ref SnapshotRetentionPeriodInDays
+      SnapshotWindow: '00:00-03:00'
+
+  SlowLogLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/elasticache/redis/slow-log'
+      RetentionInDays: !Ref LogsRetentionInDays
+
+  EngineLogLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/elasticache/redis/engine-log'
+      RetentionInDays: !Ref LogsRetentionInDays
+
+Outputs:
+  RedisEndpoint:
+    Description: Redis caching cluster URL
+    Value: !Join
+      - ''
+      - - 'rediss://'
+        - !GetAtt
+          - RedisCluster
+          - PrimaryEndPoint.Address
+        - ':'
+        - !GetAtt
+          - RedisCluster
+          - PrimaryEndPoint.Port
+  RedisClusterId:
+    Description: Redis caching cluster Id
+    Value: !Ref RedisCluster
+  RedisEndpointAddress:
+    Description: Redis caching cluster Address
+    Value: !GetAtt 'RedisCluster.PrimaryEndPoint.Address'
+  RedisEndpointPort:
+    Description: Redis caching cluster Port
+    Value: !GetAtt 'RedisCluster.PrimaryEndPoint.Port'
+  RedisSecretArn:
+    Description: Redis caching Secret ARN
+    Value: !Ref RedisCredentialsSecret

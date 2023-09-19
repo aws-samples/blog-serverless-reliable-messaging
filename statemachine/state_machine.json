@@ -1,0 +1,178 @@
+{
+    "Comment": "Message Archive State Machine",
+    "StartAt": "Parallel",
+    "States": {
+        "Parallel": {
+            "Type": "Parallel",
+            "Branches": [
+                {
+                    "StartAt": "Transformer for Raw",
+                    "States": {
+                        "Transformer for Raw": {
+                            "Type": "Pass",
+                            "Next": "SNS Publish Initial Input",
+                            "Parameters": {
+                                "message": "Data workflow started",
+                                "messageMetaData.$": "$.messageMetaData",
+                                "messageID.$": "$.messageID",
+                                "storageContext": {
+                                    "redisReference.$": "$.storageContext.redisReference",
+                                    "S3Reference.$": "$.storageContext.S3Reference",
+                                    "metaDataReference.$": "$.storageContext.metaDataReference"
+                                },
+                                "state.$": "$.storageContext.persistence"
+                            }
+                        },
+                        "SNS Publish Initial Input": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::sns:publish",
+                            "Parameters": {
+                                "Message.$": "$",
+                                "TopicArn": "${SNSTopic}"
+                            },
+                            "End": true,
+                            "ResultPath": "$.input"
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Message Archive Handler",
+                    "States": {
+                        "Message Archive Handler": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::lambda:invoke",
+                            "OutputPath": "$.Payload",
+                            "Parameters": {
+                                "Payload.$": "$",
+                                "FunctionName": "${MessageArchiveHandlerFn}"
+                            },
+                            "Retry": [
+                                {
+                                    "ErrorEquals": [
+                                        "Lambda.ServiceException",
+                                        "Lambda.AWSLambdaException",
+                                        "Lambda.SdkClientException"
+                                    ],
+                                    "IntervalSeconds": 2,
+                                    "MaxAttempts": 6,
+                                    "BackoffRate": 2
+                                }
+                            ],
+                            "Next": "Transformer for Archive"
+                        },
+                        "Transformer for Archive": {
+                            "Type": "Pass",
+                            "Next": "SNS Publish Data Archive",
+                            "Parameters": {
+                                "message": "S3 Archive Completed",
+                                "messageMetaData.$": "$.body.messageMetaData",
+                                "messageID.$": "$.body.messageID",
+                                "storageContext": {
+                                    "redisReference.$": "$.body.storageContext.redisReference",
+                                    "S3Reference.$": "$.body.storageContext.S3Reference",
+                                    "metaDataReference.$": "$.body.storageContext.metaDataReference"
+                                },
+                                "state": "$.body.storageContext.persistence"
+                            }
+                        },
+                        "SNS Publish Data Archive": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::sns:publish",
+                            "Parameters": {
+                                "Message.$": "$",
+                                "TopicArn": "${SNSTopic}"
+                            },
+                            "End": true,
+                            "ResultPath": "$.input"
+                        }
+                    }
+                },
+                {
+                    "StartAt": "Message Meta Data Handler Initial",
+                    "States": {
+                        "Message Meta Data Handler Initial": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::lambda:invoke",
+                            "OutputPath": "$.Payload",
+                            "Parameters": {
+                                "Payload.$": "$",
+                                "FunctionName": "${MessageMetaDataHandlerFn}"
+                            },
+                            "Retry": [
+                                {
+                                    "ErrorEquals": [
+                                        "Lambda.ServiceException",
+                                        "Lambda.AWSLambdaException",
+                                        "Lambda.SdkClientException"
+                                    ],
+                                    "IntervalSeconds": 2,
+                                    "MaxAttempts": 6,
+                                    "BackoffRate": 2
+                                }
+                            ],
+                            "Next": "Transformer for MetaData"
+                        },
+                        "Transformer for MetaData": {
+                            "Type": "Pass",
+                            "Next": "SNS Publish Meta Data Archive",
+                            "Parameters": {
+                                "message": "Meta Data arcghive completed",
+                                "messageMetaData.$": "$.body.messageMetaData",
+                                "messageID.$": "$.body.messageID",
+                                "storageContext": {
+                                    "redisReference.$": "$.body.storageContext.redisReference",
+                                    "S3Reference.$": "$.body.storageContext.S3Reference",
+                                    "metaDataReference.$": "$.body.storageContext.metaDataReference"
+                                },
+                                "state.$": "$.body.storageContext.persistence"
+                            }
+                        },
+                        "SNS Publish Meta Data Archive": {
+                            "Type": "Task",
+                            "Resource": "arn:aws:states:::sns:publish",
+                            "Parameters": {
+                                "Message.$": "$",
+                                "TopicArn": "${SNSTopic}"
+                            },
+                            "End": true,
+                            "ResultPath": "$.input"
+                        }
+                    }
+                }
+            ],
+            "Next": "Data State Aggregator Lambda"
+        },
+        "Data State Aggregator Lambda": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "OutputPath": "$.Payload",
+            "Parameters": {
+                "Payload.$": "$",
+                "FunctionName": "${FinalStateAggregateFn}"
+            },
+            "Retry": [
+                {
+                    "ErrorEquals": [
+                        "Lambda.ServiceException",
+                        "Lambda.AWSLambdaException",
+                        "Lambda.SdkClientException",
+                        "Lambda.TooManyRequestsException"
+                    ],
+                    "IntervalSeconds": 2,
+                    "MaxAttempts": 6,
+                    "BackoffRate": 2
+                }
+            ],
+            "Next": "SNS Final Publish"
+        },
+        "SNS Final Publish": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+                "Message.$": "$",
+                "TopicArn": "${SNSTopic}"
+            },
+            "End": true
+        }
+    }
+}

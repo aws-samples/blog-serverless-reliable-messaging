@@ -1,0 +1,503 @@
+##
+## MIT No Attribution
+##
+## Copyright 2023 Amazon.com, Inc. or its affiliates.
+##
+## Permission is hereby granted, free of charge, to any person obtaining a copy of this
+## software and associated documentation files (the "Software"), to deal in the Software
+## without restriction, including without limitation the rights to use, copy, modify,
+## merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+## permit persons to whom the Software is furnished to do so.
+##
+## THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+## INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+## PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+## HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+## OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+## SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.##
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'serverless-streaming-pipeline'
+
+Parameters:
+  ElasticacheInstanceClass:
+    Type: String
+    Default: cache.t3.small
+  ElasticReplicaCount:
+    Type: Number
+    Default: '2'
+  ProjectName:
+    Type: String
+    Default: serverless-streaming-pipeline
+  MultiAZ:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Globals:
+  Function:
+    Runtime: python3.10
+    Timeout: 30
+    Environment:
+      Variables:
+        RedisEndpointAddress: !GetAtt RedisStack.Outputs.RedisEndpointAddress
+        RedisEndpointPort: !GetAtt RedisStack.Outputs.RedisEndpointPort
+        RedisURL: !GetAtt RedisStack.Outputs.RedisEndpoint
+        RedisUsername: '{{resolve:secretsmanager:redis-caching-credentials:SecretString:username}}'
+        RedisAuthToken: '{{resolve:secretsmanager:redis-caching-credentials:SecretString:authToken}}'
+        RedisSecretArn: !GetAtt RedisStack.Outputs.RedisSecretArn
+
+Resources:
+  VpcStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        MultiAZ: !Ref MultiAZ
+        ProjectName: !Ref ProjectName
+      TemplateURL: './infra/vpc.template.yaml'
+
+  RedisStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters:
+        VpcId: !GetAtt VpcStack.Outputs.VPC
+        SubnetGroupIds: !GetAtt VpcStack.Outputs.PrivateSubnets
+        MultiAZ: !Ref MultiAZ
+        InstanceType: !Ref ElasticacheInstanceClass
+        ReplicaCount: !Ref ElasticReplicaCount
+      TemplateURL: './infra/redis.template.yaml'
+
+  LambdaEgressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Egress access for Web and Redis port
+      SecurityGroupEgress:
+        - Description: HTTP Access from Lambda Function to Internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: HTTPS Access from Lambda Function to Internet
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: Redis Access from Lambda Function
+          IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: 0.0.0.0/0
+      VpcId: !GetAtt VpcStack.Outputs.VPC
+
+  IngestMessageDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: IngestMessageTestDLQ
+      
+  MetaDataDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: MetaDataDLQ
+      
+  MessageArchiveDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: MessageArchiveDLQ
+         
+  FinalStateDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: FinalStateDLQ
+   
+  DemoSubscriberQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: DemoSubscriberQ
+
+  S3IngestMessagesFailed:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+ 
+  MessageFailedS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3IngestMessagesFailed
+      PolicyDocument:
+        Statement:
+          - Sid: RequireTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "*"
+            Resource: !Join ["", ["arn:aws:s3:::", !Ref S3IngestMessagesFailed]]
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
+
+  S3MessageArchive:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+ 
+  MessageArchiveS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3MessageArchive
+      PolicyDocument:
+        Statement:
+          - Sid: RequireTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "*"
+            Resource: !Join ["", ["arn:aws:s3:::", !Ref S3MessageArchive]]
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
+
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "NotificationTopic"
+      Subscription:
+        - Protocol: sqs
+          Endpoint: !GetAtt DemoSubscriberQ.Arn
+
+  ApiGatewayEndpoint:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Auth:
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          UsagePlanName: GatewayAuthorization    
+
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: src/commonLayer/
+      CompatibleRuntimes:
+        - python3.10
+    Metadata:
+      BuildMethod: python3.10
+
+  IngestMessageFailureFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: IngestMessageDLQ
+    Properties:
+      CodeUri: src/ingestFailure/
+      Handler: ingestMessageFailure.lambda_handler
+      Runtime: python3.10
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          FailBucket: !Ref S3IngestMessagesFailed
+          DLQUrl: !Ref IngestMessageDLQ
+      EventInvokeConfig:
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt IngestMessageDLQ.Arn
+      VpcConfig:
+        SecurityGroupIds: [ !Ref LambdaEgressSecurityGroup ]
+        SubnetIds: !Split [ ',', !GetAtt VpcStack.Outputs.PrivateSubnets ]
+      Layers:
+        - Ref: CommonLayer
+
+  IngestMessageFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: IngestMessageFailureFunction
+    Properties:
+      CodeUri: src/ingestMessage/
+      Handler: ingestMessage.lambda_handler
+      Runtime: python3.10
+      Architectures:
+      - x86_64
+      EventInvokeConfig:
+        DestinationConfig:
+          OnFailure:
+            Type: Lambda
+            Destination:
+              Fn::GetAtt:
+              - IngestMessageFailureFunction
+              - Arn
+      Timeout: 30
+      MemorySize: 8000
+      Environment:
+        Variables:
+          StepFunctionArn: !Ref MessageStateMachine
+          DLQUrl: !Ref IngestMessageDLQ
+          FailLambda: !Ref IngestMessageFailureFunction
+      VpcConfig:
+        SecurityGroupIds: [ !Ref LambdaEgressSecurityGroup ]
+        SubnetIds: !Split [ ',', !GetAtt VpcStack.Outputs.PrivateSubnets ]
+      Events:
+        PostEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayEndpoint
+            Path: /ingestMessage
+            Method: POST
+            RequestParameters:
+              - method.request.header.Authorization:
+                  Required: true
+                  Caching: true
+            Auth:
+              ApiKeyRequired: true
+      Layers:
+        - Ref: CommonLayer
+
+  MessageMetaDataHandlerFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    DependsOn: MetaDataDLQ
+    Properties:
+      CodeUri: src/messageMetaData/
+      Handler: messageMetaDataHandler.lambda_handler
+      Runtime: python3.10
+      Architectures:
+        - x86_64
+      EventInvokeConfig:
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt MetaDataDLQ.Arn
+      Environment:
+        Variables:
+          MetaDataTable: !Ref DynamoDbMetaDataTable
+          DLQUrl: !Ref MetaDataDLQ
+      VpcConfig:
+        SecurityGroupIds: [ !Ref LambdaEgressSecurityGroup ]
+        SubnetIds: !Split [ ',', !GetAtt VpcStack.Outputs.PrivateSubnets ]
+      Layers:
+        - Ref: CommonLayer
+
+  MessageArchiveHandlerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MessageArchiveDLQ
+    Properties:
+      CodeUri: src/messageArchive/
+      Handler: messageArchiveHandler.lambda_handler
+      Runtime: python3.10
+      Architectures:
+        - x86_64
+      EventInvokeConfig:
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt MessageArchiveDLQ.Arn
+      Environment:
+        Variables:
+          S3ArchiveBucketName: !Ref S3MessageArchive
+          DLQUrl: !Ref MessageArchiveDLQ
+      VpcConfig:
+        SecurityGroupIds: [ !Ref LambdaEgressSecurityGroup ]
+        SubnetIds: !Split [ ',', !GetAtt VpcStack.Outputs.PrivateSubnets ]
+      Layers:
+        - Ref: CommonLayer
+
+  FinalStateAggregateFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: FinalStateDLQ
+    Properties:
+      CodeUri: src/finalStateAggregate/
+      Handler: finalStateAggregateHandler.lambda_handler
+      Runtime: python3.10
+      Architectures:
+        - x86_64
+      EventInvokeConfig:
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt FinalStateDLQ.Arn
+      Environment:
+        Variables:
+          MetaDataTable: !Ref DynamoDbMetaDataTable
+          DLQUrl: !Ref FinalStateDLQ
+      VpcConfig:
+        SecurityGroupIds: [ !Ref LambdaEgressSecurityGroup ]
+        SubnetIds: !Split [ ',', !GetAtt VpcStack.Outputs.PrivateSubnets ]
+      Layers:
+        - Ref: CommonLayer
+        
+  MessageStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/state_machine.json
+      DefinitionSubstitutions:
+        MessageArchiveHandlerFn: !GetAtt MessageArchiveHandlerFunction.Arn
+        MessageMetaDataHandlerFn: !GetAtt MessageMetaDataHandlerFunction.Arn
+        FinalStateAggregateFn: !GetAtt FinalStateAggregateFunction.Arn
+        SNSTopic: !Ref MySNSTopic
+      Tracing:
+        Enabled: true
+      Policies:
+        Statement:
+        - Sid: Stmt1666902224250
+          Action:
+          - lambda:InvokeFunction
+          Effect: Allow
+          Resource: 
+            - !Join [":", [!GetAtt MessageMetaDataHandlerFunction.Arn, "*"]]
+            - !Join [":", [!GetAtt MessageArchiveHandlerFunction.Arn, "*"]]
+        - Sid: Stmt1666902244428
+          Action:
+          - lambda:InvokeFunction
+          Effect: Allow
+          Resource: 
+            - !GetAtt MessageMetaDataHandlerFunction.Arn
+            - !GetAtt MessageArchiveHandlerFunction.Arn
+            - !GetAtt FinalStateAggregateFunction.Arn
+        - Sid: Stmt1666902274292
+          Action:
+          - sns:Publish
+          Effect: Allow
+          Resource: 
+           - !Ref MySNSTopic
+
+  DynamoDbMetaDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      TableName: "metaDataTable"
+      AttributeDefinitions: 
+        - 
+          AttributeName: "transcationID"
+          AttributeType: "S"
+        - 
+          AttributeName: "timestampValue"
+          AttributeType: "N"
+      KeySchema: 
+        - 
+          AttributeName: "transcationID"
+          KeyType: "HASH"
+        - 
+          AttributeName: "timestampValue"
+          KeyType: "RANGE"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  MessageIngestStateMachineConnector:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: IngestMessageFunction
+      Destination:
+        Id: MessageStateMachine
+      Permissions:
+        - Read
+        - Write
+
+  MessageArchiveS3Connector:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: MessageArchiveHandlerFunction
+      Destination:
+        Id: S3MessageArchive
+      Permissions:
+        - Read
+        - Write
+
+  SNSToSQSConnector:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: MySNSTopic
+      Destination:
+        Id: DemoSubscriberQ
+      Permissions:
+        - Write
+
+  FinalWriteToDynamoConnector:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: FinalStateAggregateFunction
+      Destination:
+        Id: DynamoDbMetaDataTable
+      Permissions:
+        - Read
+        - Write
+
+  InitialWriteToDynamoConnector:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: MessageMetaDataHandlerFunction
+      Destination:
+        Id: DynamoDbMetaDataTable
+      Permissions:
+        - Read
+        - Write
+
+  IngestFailureToIngestFailureDLQ:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: IngestMessageFailureFunction
+      Destination:
+        Id: IngestMessageDLQ
+      Permissions:
+        - Read
+        - Write
+
+  IngestFailureToFailureS3:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: IngestMessageFailureFunction
+      Destination:
+        Id: S3IngestMessagesFailed
+      Permissions:
+        - Read
+        - Write
+
+  IngestToIngestFail:
+    Type: AWS::Serverless::Connector
+    Properties:
+      Source:
+        Id: IngestMessageFunction
+      Destination:
+        Id: IngestMessageFailureFunction
+      Permissions:
+        - Write
+
+Outputs:
+  IngestMessageApi:
+    Description: API Gateway endpoint URL for Prod stage for Hello World function
+    Value:
+      Fn::Sub: https://${ApiGatewayEndpoint}.execute-api.${AWS::Region}.amazonaws.com/Prod/ingestmessage/
+  IngestMessageFunction:
+    Description: Ingest Message Function
+    Value:
+      Fn::GetAtt:
+      - IngestMessageFunction
+      - Arn
+  IngestMessageFunctionIamRole:
+    Description: Ingest Message Function IAM role
+    Value:
+      Fn::GetAtt:
+      - IngestMessageFunctionRole
+      - Arn
+  PrimaryEndPointAddress:
+    Description: 'The DNS address of the primary read-write cache node.'
+    Value: !GetAtt 'RedisStack.Outputs.RedisEndpointAddress'
+  PrimaryEndPointPort:
+    Description: 'The port that the primary read-write cache engine is listening on.'
+    Value: !GetAtt 'RedisStack.Outputs.RedisEndpointPort'
+  ApiKey:
+    Description: "You can find your API Key in the AWS console: (Put in the request HEADER as 'x-api-key')"
+    Value: !Sub "https://console.aws.amazon.com/apigateway/home?region=${AWS::Region}#/api-keys/${ApiGatewayEndpointApiKey}"
+  StepFuncArn:
+    Description: 'ARN for step function'
+    Value: !Ref MessageStateMachine
+

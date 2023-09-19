@@ -1,0 +1,9 @@
+{
+    "messageMetaData": {
+        "messageType": "imageB64",
+        "sourceSystemID": "IngestMessageJavaClient",
+        "sourceTransactionID": "18a9838c-356c-4653-a983-8c356c86535f",
+        "dateTime": "2021-07-03 16:21:12.357246"
+    },
+    "messagePayload": "... base 64 encoded data ..."
+}
