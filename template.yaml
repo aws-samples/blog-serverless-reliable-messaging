@@ -473,7 +473,7 @@ Resources:
 
 Outputs:
   IngestMessageApi:
-    Description: API Gateway endpoint URL for Prod stage for Hello World function
+    Description: API Gateway endpoint URL for IngestMessage Lambda function API Endpoint
     Value:
       Fn::Sub: https://${ApiGatewayEndpoint}.execute-api.${AWS::Region}.amazonaws.com/Prod/ingestmessage/
   IngestMessageFunction:
