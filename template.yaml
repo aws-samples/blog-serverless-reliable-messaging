@@ -476,6 +476,12 @@ Outputs:
     Description: API Gateway endpoint URL for IngestMessage Lambda function API Endpoint
     Value:
       Fn::Sub: https://${ApiGatewayEndpoint}.execute-api.${AWS::Region}.amazonaws.com/Prod/ingestmessage/
+  ApiKeyConsole:
+    Description: "You can find your API Key in the AWS console: (Put in the request HEADER as 'x-api-key')"
+    Value: !Sub "https://console.aws.amazon.com/apigateway/home?region=${AWS::Region}#/api-keys/${ApiGatewayEndpointApiKey}"
+  APIKeyCLI:
+    Description: CLI command to get the api key value.
+    Value: !Sub "aws apigateway get-api-key --api-key ${ApiGatewayEndpointApiKey.APIKeyId} --include-value --query \"value\" --output text"
   IngestMessageFunction:
     Description: Ingest Message Function
     Value:
@@ -494,9 +500,6 @@ Outputs:
   PrimaryEndPointPort:
     Description: 'The port that the primary read-write cache engine is listening on.'
     Value: !GetAtt 'RedisStack.Outputs.RedisEndpointPort'
-  ApiKey:
-    Description: "You can find your API Key in the AWS console: (Put in the request HEADER as 'x-api-key')"
-    Value: !Sub "https://console.aws.amazon.com/apigateway/home?region=${AWS::Region}#/api-keys/${ApiGatewayEndpointApiKey}"
   StepFuncArn:
     Description: 'ARN for step function'
     Value: !Ref MessageStateMachine

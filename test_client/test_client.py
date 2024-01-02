@@ -18,14 +18,14 @@
 import requests
 import json
 
-BASE_URL = "<Your Base Service URL Here>"
-security_token = "<Your Security Token Here>"
+BASE_URL = "<Your API Gateway URL here (IngestMessageApi)>"
+security_key = "<Your API Key here>"
 
 json_payload = None
 with open('test_client/test_api_message.json', 'r') as f:
-    json_payload = f.read()
+    json_payload = json.load(f)
     
-r = requests.post(BASE_URL, data=json_payload, headers={'x-api-key': security_token})    
+r = requests.post(BASE_URL, json=json_payload, headers={'x-api-key': security_key})    
 
 print(r.status_code)
 if r.status_code == requests.codes.ok:
