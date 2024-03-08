@@ -16,7 +16,7 @@ HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTIO
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.-->
 
-# Building a Serverless Streaming Pipeline to Deliver Reliable Messaging
+# Building a Serverless Pipeline to Deliver Reliable Messaging
 
 <details open="open">
 <summary>Table of Contents</summary>
@@ -33,7 +33,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.-->
 
 ## About
 
-Please see the blog post [here](http://replace.me) for more information.
+Please see the blog post [here](https://aws.amazon.com/blogs/compute/building-a-serverless-streaming-pipeline-to-deliver-reliable-messaging/) for more information.
 
 The architecture is designed for maximizing audit record ingestion performance.  This system operates between the limit of most messaging systems (256Kb to 1Mb) and the limit for Lambda functions (6Mb). The primary source of latency is the time it takes for an audit record to be transmitted across the network. An AWS Lambda function to receive the message and an Amazon ElastiCache for Redis cluster provides initial blocking persistence layer write that provides better performance than S3. Once the data is persisted in ElastiCache, the AWS Step Functions workflow then manages the orchestration of the communication and persistence functions. The architecture diagram below models the flow of the audit record through the system.
 
@@ -139,11 +139,11 @@ sam deploy --guided
 
 These are the parameters that are required:
 
-1.	Stack Name: Name given to this deployment (example: serverless-streaming)
+1.	Stack Name: Name given to this deployment (example: serverless-messaging)
 1.	AWS Region: Where to deploy (example: us-east-1)
 1.	ElasticacheInstanceClass: EC2 cache instance type to use with (example: cache.t3.small)
 1.	ElasticReplicaCount: How many replicas should be used with ElastiCache (recommended minimum: 2)
-1.	ProjectName: Used for naming resources in account (example: serverless-streaming)
+1.	ProjectName: Used for naming resources in account (example: serverless-messaging)
 1.	MultiAZ: True/False if multiple Availability Zones will be used (recommend: True)
 1.	The default parameters can be selected for the remainder of questions
 
